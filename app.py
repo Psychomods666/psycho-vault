@@ -1,4 +1,4 @@
-```python
+
 import io
 import os
 import secrets
@@ -443,4 +443,3 @@ if __name__ == "__main__":
         port=5000,
         debug=False,
     )
-```
