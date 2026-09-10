@@ -1,6 +1,7 @@
+```python
+import io
 import os
 import secrets
-from pathlib import Path
 
 from flask import (
     Flask,
@@ -11,7 +12,7 @@ from flask import (
     send_file,
     url_for,
 )
-
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from crypto_engine import (
@@ -23,75 +24,101 @@ from crypto_engine import (
 )
 
 
-BASE_DIR = Path(__file__).resolve().parent
-
-VAULT_DIR = BASE_DIR / "vault"
-OUTPUT_DIR = BASE_DIR / "output"
-
-VAULT_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-
+# ============================================================
+# APPLICATION
+# ============================================================
 
 app = Flask(__name__)
 
-# Generate a random development secret.
-# For production, set FLASK_SECRET_KEY as an environment variable.
+# Flask session / flash-message secret.
+# In Vercel, FLASK_SECRET_KEY should be set as an environment
+# variable. The fallback is only for local development.
 app.secret_key = os.environ.get(
     "FLASK_SECRET_KEY",
     secrets.token_hex(32),
 )
 
 
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+# ============================================================
+# UPLOAD LIMIT
+# ============================================================
+
+# 50 MB is a safer limit for a serverless deployment.
+MAX_FILE_SIZE = 50 * 1024 * 1024
 
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
 
 
-def unique_filename(directory: Path, filename: str) -> Path:
+# ============================================================
+# HELPERS
+# ============================================================
+
+def safe_filename(filename: str, fallback: str = "file") -> str:
     """
-    Prevent overwriting an existing file.
+    Sanitize a user-supplied filename.
     """
+    name = secure_filename(filename or "")
 
-    safe_name = secure_filename(filename)
+    if not name:
+        return fallback
 
-    if not safe_name:
-        safe_name = "encrypted_file"
-
-    path = directory / safe_name
-
-    if not path.exists():
-        return path
-
-    stem = path.stem
-    suffix = path.suffix
-
-    counter = 1
-
-    while True:
-        candidate = (
-            directory
-            / f"{stem}_{counter}{suffix}"
-        )
-
-        if not candidate.exists():
-            return candidate
-
-        counter += 1
+    return name
 
 
-@app.route("/")
-def index():
-    return render_template(
-        "index.html"
+def encrypted_filename(original_filename: str) -> str:
+    """
+    Convert:
+        secret.txt
+    into:
+        secret.pvault
+
+    instead of:
+        secret.txt.pvault
+    """
+    name = safe_filename(
+        original_filename,
+        "encrypted_file",
     )
 
+    if "." in name:
+        name = name.rsplit(".", 1)[0]
+
+    return f"{name}.pvault"
+
+
+def decrypted_filename(original_filename: str) -> str:
+    """
+    Restore the original filename safely.
+    """
+    return safe_filename(
+        original_filename,
+        "decrypted_file",
+    )
+
+
+# ============================================================
+# HOME
+# ============================================================
+
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+# ============================================================
+# ENCRYPT
+# ============================================================
 
 @app.post("/encrypt")
 def encrypt():
     uploaded_file = request.files.get("file")
     password = request.form.get("password", "")
 
-    if not uploaded_file:
+    # --------------------------------------------------------
+    # Validate upload
+    # --------------------------------------------------------
+
+    if uploaded_file is None:
         flash(
             "Please select a file.",
             "error",
@@ -105,6 +132,10 @@ def encrypt():
         )
         return redirect(url_for("index"))
 
+    # --------------------------------------------------------
+    # Validate password
+    # --------------------------------------------------------
+
     if len(password) < 10:
         flash(
             "Password must contain at least 10 characters.",
@@ -113,16 +144,9 @@ def encrypt():
         return redirect(url_for("index"))
 
     try:
-        original_name = secure_filename(
-            uploaded_file.filename
-        )
-
-        if not original_name:
-            flash(
-                "Invalid filename.",
-                "error",
-            )
-            return redirect(url_for("index"))
+        # ----------------------------------------------------
+        # Read file into memory
+        # ----------------------------------------------------
 
         data = uploaded_file.read()
 
@@ -133,61 +157,97 @@ def encrypt():
             )
             return redirect(url_for("index"))
 
+        # ----------------------------------------------------
+        # Secure original filename
+        # ----------------------------------------------------
+
+        original_name = safe_filename(
+            uploaded_file.filename,
+            "encrypted_file",
+        )
+
+        # ----------------------------------------------------
+        # Calculate original SHA-256
+        # ----------------------------------------------------
+
+        fingerprint = sha256_bytes(data)
+
+        # ----------------------------------------------------
+        # Encrypt
+        # ----------------------------------------------------
+
         encrypted = encrypt_bytes(
             data,
             original_name,
             password,
         )
 
-        output_path = unique_filename(
-            VAULT_DIR,
-            original_name + ".pvault",
+        # ----------------------------------------------------
+        # Final filename
+        #
+        # secret.txt -> secret.pvault
+        # ----------------------------------------------------
+
+        download_name = encrypted_filename(
+            original_name
         )
 
-        output_path.write_bytes(
-            encrypted
+        # ----------------------------------------------------
+        # Send encrypted file directly to browser.
+        #
+        # IMPORTANT:
+        # Nothing is permanently written to the
+        # Vercel filesystem.
+        # ----------------------------------------------------
+
+        response = send_file(
+            io.BytesIO(encrypted),
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            download_name=download_name,
         )
 
-        fingerprint = sha256_bytes(data)
+        # ----------------------------------------------------
+        # Useful headers
+        # ----------------------------------------------------
 
-        flash(
-            f"Encryption successful — {output_path.name}",
-            "success",
-        )
+        response.headers["X-PSYCHO-VAULT"] = "AES-256-GCM"
+        response.headers["X-Original-SHA256"] = fingerprint
 
-        return render_template(
-            "index.html",
-            result={
-                "type": "encrypt",
-                "filename": output_path.name,
-                "size": len(encrypted),
-                "sha256": fingerprint,
-                "download_url": url_for(
-                    "download_vault",
-                    filename=output_path.name,
-                ),
-            },
-        )
+        return response
 
-    except Exception as exc:
+    except RequestEntityTooLarge:
+        raise
+
+    except Exception:
         app.logger.exception(
             "Encryption error"
         )
 
         flash(
-            f"Encryption failed: {exc}",
+            "Encryption failed. The file could not be encrypted.",
             "error",
         )
 
-        return redirect(url_for("index"))
+        return redirect(
+            url_for("index")
+        )
 
+
+# ============================================================
+# DECRYPT
+# ============================================================
 
 @app.post("/decrypt")
 def decrypt():
     uploaded_file = request.files.get("file")
     password = request.form.get("password", "")
 
-    if not uploaded_file:
+    # --------------------------------------------------------
+    # Validate upload
+    # --------------------------------------------------------
+
+    if uploaded_file is None:
         flash(
             "Please select a .pvault file.",
             "error",
@@ -201,6 +261,10 @@ def decrypt():
         )
         return redirect(url_for("index"))
 
+    # --------------------------------------------------------
+    # Validate password
+    # --------------------------------------------------------
+
     if not password:
         flash(
             "Password is required.",
@@ -209,53 +273,108 @@ def decrypt():
         return redirect(url_for("index"))
 
     try:
+        # ----------------------------------------------------
+        # Read encrypted package
+        # ----------------------------------------------------
+
         package = uploaded_file.read()
+
+        if not package:
+            flash(
+                "The selected vault file is empty.",
+                "error",
+            )
+            return redirect(url_for("index"))
+
+        # ----------------------------------------------------
+        # Decrypt
+        #
+        # crypto_engine.py performs authentication and
+        # integrity verification.
+        # ----------------------------------------------------
 
         metadata, plaintext = decrypt_bytes(
             package,
             password,
         )
 
-        original_filename = secure_filename(
-            metadata["original_filename"]
+        # ----------------------------------------------------
+        # Recover original filename
+        # ----------------------------------------------------
+
+        original_filename = metadata.get(
+            "original_filename",
+            "decrypted_file",
         )
 
-        if not original_filename:
-            original_filename = "decrypted_file"
-
-        output_path = unique_filename(
-            OUTPUT_DIR,
-            original_filename,
+        download_name = decrypted_filename(
+            original_filename
         )
 
-        output_path.write_bytes(
+        # ----------------------------------------------------
+        # Verify SHA-256 again
+        # ----------------------------------------------------
+
+        calculated_hash = sha256_bytes(
             plaintext
         )
 
-        fingerprint = sha256_bytes(
-            plaintext
+        stored_hash = metadata.get(
+            "sha256",
+            "",
         )
 
-        flash(
-            "Decryption and integrity verification successful.",
-            "success",
+        # Failing closed:
+        # If the integrity hash does not match,
+        # DO NOT release the decrypted file.
+        if not stored_hash:
+            flash(
+                "DECRYPTION BLOCKED — integrity information is missing.",
+                "error",
+            )
+            return redirect(
+                url_for("index")
+            )
+
+        if calculated_hash.lower() != stored_hash.lower():
+            flash(
+                "DECRYPTION BLOCKED — file integrity verification failed.",
+                "error",
+            )
+            return redirect(
+                url_for("index")
+            )
+
+        # ----------------------------------------------------
+        # Send decrypted file directly to browser.
+        #
+        # Nothing is permanently stored on Vercel.
+        # ----------------------------------------------------
+
+        response = send_file(
+            io.BytesIO(plaintext),
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            download_name=download_name,
         )
 
-        return render_template(
-            "index.html",
-            result={
-                "type": "decrypt",
-                "filename": output_path.name,
-                "size": len(plaintext),
-                "sha256": fingerprint,
-                "download_url": url_for(
-                    "download_output",
-                    filename=output_path.name,
-                ),
-            },
-        )
+        # ----------------------------------------------------
+        # Security / verification headers
+        # ----------------------------------------------------
+
+        response.headers["X-PSYCHO-VAULT"] = "INTEGRITY-VERIFIED"
+        response.headers["X-SHA256"] = calculated_hash
+
+        return response
 
     except InvalidPasswordError:
+        # ----------------------------------------------------
+        # FAIL CLOSED
+        #
+        # Wrong password OR authentication failure /
+        # tampering should never release plaintext.
+        # ----------------------------------------------------
+
         flash(
             "DECRYPTION BLOCKED — wrong password or file tampering detected.",
             "error",
@@ -265,23 +384,31 @@ def decrypt():
             url_for("index")
         )
 
-    except InvalidVaultError as exc:
+    except InvalidVaultError:
+        # ----------------------------------------------------
+        # Do not expose internal crypto details.
+        # ----------------------------------------------------
+
         flash(
-            f"Invalid vault file: {exc}",
+            "DECRYPTION BLOCKED — invalid or corrupted vault file.",
             "error",
         )
 
         return redirect(
             url_for("index")
         )
+
+    except RequestEntityTooLarge:
+        raise
 
     except Exception:
         app.logger.exception(
             "Decryption error"
         )
 
+        # Generic error = fail closed.
         flash(
-            "Decryption failed.",
+            "DECRYPTION BLOCKED — the vault file could not be safely decrypted.",
             "error",
         )
 
@@ -290,38 +417,14 @@ def decrypt():
         )
 
 
-@app.get("/download/vault/<path:filename>")
-def download_vault(filename):
-    path = VAULT_DIR / secure_filename(filename)
-
-    if not path.exists() or not path.is_file():
-        return "File not found.", 404
-
-    return send_file(
-        path,
-        as_attachment=True,
-        download_name=path.name,
-    )
-
-
-@app.get("/download/output/<path:filename>")
-def download_output(filename):
-    path = OUTPUT_DIR / secure_filename(filename)
-
-    if not path.exists() or not path.is_file():
-        return "File not found.", 404
-
-    return send_file(
-        path,
-        as_attachment=True,
-        download_name=path.name,
-    )
-
+# ============================================================
+# 413 — FILE TOO LARGE
+# ============================================================
 
 @app.errorhandler(413)
 def file_too_large(error):
     flash(
-        "File exceeds the 100 MB upload limit.",
+        "File exceeds the 50 MB upload limit.",
         "error",
     )
 
@@ -330,9 +433,14 @@ def file_too_large(error):
     )
 
 
+# ============================================================
+# VERCEL / LOCAL ENTRY POINT
+# ============================================================
+
 if __name__ == "__main__":
     app.run(
         host="127.0.0.1",
         port=5000,
         debug=False,
     )
+```
