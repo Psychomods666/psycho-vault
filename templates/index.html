@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+
+{% block title %}
+PSYCHO VAULT — Secure File Encryption
+{% endblock %}
+
+
+{% block content %}
+
+<section class="hero">
+
+    <div class="eyebrow">
+        PRIVATE FILE SECURITY / LOCAL PROCESSING
+    </div>
+
+    <h1>
+        YOUR FILES.
+        <span>YOUR KEY.</span>
+    </h1>
+
+    <p>
+        Encrypt and decrypt files locally using
+        authenticated AES-256-GCM encryption and
+        Argon2id password-based key derivation.
+    </p>
+
+</section>
+
+
+<section class="security-panel">
+
+    <div class="security-item">
+
+        <div class="security-icon">
+            01
+        </div>
+
+        <div>
+            <strong>AES-256-GCM</strong>
+            <small>
+                Authenticated encryption
+            </small>
+        </div>
+
+    </div>
+
+
+    <div class="security-item">
+
+        <div class="security-icon">
+            02
+        </div>
+
+        <div>
+            <strong>ARGON2ID</strong>
+            <small>
+                Password key derivation
+            </small>
+        </div>
+
+    </div>
+
+
+    <div class="security-item">
+
+        <div class="security-icon">
+            03
+        </div>
+
+        <div>
+            <strong>SHA-256</strong>
+            <small>
+                Integrity fingerprint
+            </small>
+        </div>
+
+    </div>
+
+</section>
+
+
+<div class="workspace">
+
+
+    <!-- ENCRYPT -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+                <span class="card-number">
+                    01
+                </span>
+
+                <h2>
+                    ENCRYPT FILE
+                </h2>
+            </div>
+
+            <span class="badge green">
+                PROTECT
+            </span>
+
+        </div>
+
+
+        <form
+            action="{{ url_for('encrypt') }}"
+            method="POST"
+            enctype="multipart/form-data"
+        >
+
+            <label
+                class="dropzone"
+                for="encrypt-file"
+            >
+
+                <input
+                    type="file"
+                    id="encrypt-file"
+                    name="file"
+                    required
+                >
+
+                <div class="upload-symbol">
+                    +
+                </div>
+
+                <strong>
+                    SELECT FILE
+                </strong>
+
+                <span id="encrypt-file-name">
+                    Any file type · Maximum 100 MB
+                </span>
+
+            </label>
+
+
+            <div class="field">
+
+                <label>
+                    ENCRYPTION PASSWORD
+                </label>
+
+                <div class="password-box">
+
+                    <input
+                        type="password"
+                        id="encrypt-password"
+                        name="password"
+                        minlength="10"
+                        required
+                        placeholder="Minimum 10 characters"
+                    >
+
+                    <button
+                        type="button"
+                        class="show-password"
+                        data-target="encrypt-password"
+                    >
+                        SHOW
+                    </button>
+
+                </div>
+
+                <div class="strength">
+
+                    <div
+                        class="strength-bar"
+                        id="encrypt-strength"
+                    ></div>
+
+                </div>
+
+                <small class="hint">
+                    Use a long, unique password.
+                    You cannot recover a forgotten password.
+                </small>
+
+            </div>
+
+
+            <button
+                class="primary-button"
+                type="submit"
+            >
+                ENCRYPT FILE
+                <span>→</span>
+            </button>
+
+        </form>
+
+    </section>
+
+
+
+    <!-- DECRYPT -->
+
+    <section class="card">
+
+        <div class="card-header">
+
+            <div>
+                <span class="card-number">
+                    02
+                </span>
+
+                <h2>
+                    DECRYPT FILE
+                </h2>
+            </div>
+
+            <span class="badge purple">
+                RESTORE
+            </span>
+
+        </div>
+
+
+        <form
+            action="{{ url_for('decrypt') }}"
+            method="POST"
+            enctype="multipart/form-data"
+        >
+
+            <label
+                class="dropzone decrypt-zone"
+                for="decrypt-file"
+            >
+
+                <input
+                    type="file"
+                    id="decrypt-file"
+                    name="file"
+                    accept=".pvault"
+                    required
+                >
+
+                <div class="upload-symbol">
+                    +
+                </div>
+
+                <strong>
+                    SELECT .PVAULT FILE
+                </strong>
+
+                <span id="decrypt-file-name">
+                    PSYCHO VAULT encrypted file
+                </span>
+
+            </label>
+
+
+            <div class="field">
+
+                <label>
+                    DECRYPTION PASSWORD
+                </label>
+
+                <div class="password-box">
+
+                    <input
+                        type="password"
+                        id="decrypt-password"
+                        name="password"
+                        required
+                        placeholder="Enter your password"
+                    >
+
+                    <button
+                        type="button"
+                        class="show-password"
+                        data-target="decrypt-password"
+                    >
+                        SHOW
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <button
+                class="primary-button purple-button"
+                type="submit"
+            >
+                DECRYPT FILE
+                <span>→</span>
+            </button>
+
+        </form>
+
+    </section>
+
+</div>
+
+
+
+{% if result %}
+
+<section class="result-panel">
+
+    <div class="result-header">
+
+        <div>
+
+            <span class="eyebrow">
+                OPERATION COMPLETE
+            </span>
+
+            <h2>
+                {% if result.type == "encrypt" %}
+                    FILE ENCRYPTED
+                {% else %}
+                    FILE DECRYPTED
+                {% endif %}
+            </h2>
+
+        </div>
+
+        <div class="verified">
+            ✓ VERIFIED
+        </div>
+
+    </div>
+
+
+    <div class="result-grid">
+
+        <div class="result-item">
+
+            <span>
+                FILE
+            </span>
+
+            <strong>
+                {{ result.filename }}
+            </strong>
+
+        </div>
+
+
+        <div class="result-item">
+
+            <span>
+                SIZE
+            </span>
+
+            <strong>
+                {{ "{:,}".format(result.size) }} bytes
+            </strong>
+
+        </div>
+
+
+        <div class="result-item hash">
+
+            <span>
+                SHA-256
+            </span>
+
+            <strong>
+                {{ result.sha256 }}
+            </strong>
+
+        </div>
+
+    </div>
+
+
+    <a
+        class="download-button"
+        href="{{ result.download_url }}"
+    >
+        DOWNLOAD RESULT
+        <span>↓</span>
+    </a>
+
+</section>
+
+{% endif %}
+
+
+
+<section class="warning-panel">
+
+    <div class="warning-icon">
+        !
+    </div>
+
+    <div>
+
+        <strong>
+            IMPORTANT SECURITY NOTICE
+        </strong>
+
+        <p>
+            PSYCHO VAULT does not store or recover your password.
+            If you lose it, the encrypted file cannot be decrypted.
+            Always keep an independent backup of important files.
+        </p>
+
+    </div>
+
+</section>
+
+{% endblock %}

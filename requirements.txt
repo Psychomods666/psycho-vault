@@ -1,0 +1,4 @@
+Flask>=3.1,<4
+cryptography>=45,<51
+argon2-cffi>=25,<26
+Werkzeug>=3.1,<4
